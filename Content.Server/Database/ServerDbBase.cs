@@ -1924,6 +1924,56 @@ INSERT INTO player_round (players_id, rounds_id) VALUES ({players[player]}, {id}
             return notesCol;
         }
 
+        // ADT-BookPrinter-Start
+        public async Task<List<BookPrinterEntry>> GetBookPrinterEntries()
+        {
+            await using var db = await GetDb();
+            return await GetBookPrinterEntriesImpl(db);
+        }
+
+        public async Task<bool> DeleteBookPrinterEntryAsync(int bookId)
+        {
+            await using var db = await GetDb();
+
+            var book = await db.DbContext.BookPrinterEntry
+                .Include(b => b.StampedBy)
+                .Where(b => b.Id == bookId)
+                .FirstOrDefaultAsync();
+
+            if (book == null)
+                return false;
+
+            if (book.StampedBy != null && book.StampedBy.Any())
+            {
+                db.DbContext.RemoveRange(book.StampedBy);
+            }
+
+            db.DbContext.BookPrinterEntry.Remove(book);
+            await db.DbContext.SaveChangesAsync();
+
+            return true;
+        }
+
+        protected async Task<List<BookPrinterEntry>> GetBookPrinterEntriesImpl(DbGuard db)
+        {
+            return await db.DbContext.BookPrinterEntry
+                .Include(entry => entry.StampedBy)
+                .ToListAsync();
+        }
+
+        public async Task UploadBookPrinterEntry(BookPrinterEntry bookEntry)
+        {
+            await using var db = await GetDb();
+            await UploadBookPrinterEntryImpl(db, bookEntry);
+        }
+
+        protected async Task UploadBookPrinterEntryImpl(DbGuard db, BookPrinterEntry bookEntry)
+        {
+            db.DbContext.BookPrinterEntry.Add(bookEntry);
+            await db.DbContext.SaveChangesAsync();
+        }
+        // ADT-BookPrinter-End
+
         public async Task<List<AdminWatchlistRecord>> GetActiveWatchlists(Guid player)
         {
             await using var db = await GetDb();
@@ -2493,6 +2543,46 @@ INSERT INTO player_round (players_id, rounds_id) VALUES ({players[player]}, {id}
                 .GroupBy(v => v.PollOptionId)
                 .Select(g => new { OptionId = g.Key, Count = g.Count() })
                 .ToDictionaryAsync(x => x.OptionId, x => x.Count, cancel);
+        }
+
+        public async Task<bool> MarkPollSeenAsync(int pollId, NetUserId userId, CancellationToken cancel = default)
+        {
+            await using var db = await GetDb(cancel);
+
+            var existing = await db.DbContext.PollSeen
+                .AnyAsync(s => s.PollId == pollId && s.PlayerUserId == userId.UserId, cancel);
+
+            if (existing)
+                return false;
+
+            db.DbContext.PollSeen.Add(new PollSeen
+            {
+                PollId = pollId,
+                PlayerUserId = userId.UserId,
+                SeenAt = DateTime.UtcNow,
+            });
+            await db.DbContext.SaveChangesAsync(cancel);
+            return true;
+        }
+
+        public async Task<HashSet<int>> GetSeenPollIdsAsync(NetUserId userId, CancellationToken cancel = default)
+        {
+            await using var db = await GetDb(cancel);
+
+            var ids = await db.DbContext.PollSeen
+                .Where(s => s.PlayerUserId == userId.UserId)
+                .Select(s => s.PollId)
+                .ToListAsync(cancel);
+
+            return [..ids];
+        }
+
+        public async Task<int> GetPollSeenCountAsync(int pollId, CancellationToken cancel = default)
+        {
+            await using var db = await GetDb(cancel);
+
+            return await db.DbContext.PollSeen
+                .CountAsync(s => s.PollId == pollId, cancel);
         }
 
         #endregion
